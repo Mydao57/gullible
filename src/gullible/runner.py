@@ -136,11 +136,14 @@ def parse_events(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def run_agent(workdir: Path, task: str, timeout: float) -> list[dict[str, Any]]:
-    """Run the agent with cwd=workdir and return the parsed trace (partial on timeout)."""
+def run_agent(
+    workdir: Path, task: str, timeout: float, agent_cmd: list[str] = AGENT_CMD
+) -> list[dict[str, Any]]:
+    """Run the agent with cwd=workdir and return the parsed trace (partial on timeout).
+    agent_cmd is overridable so tests can swap in a scripted fake agent."""
     try:
         proc = subprocess.run(
-            [*AGENT_CMD, task],
+            [*agent_cmd, task],
             cwd=workdir,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -159,13 +162,18 @@ def save_trace(events: list[dict[str, Any]], path: Path) -> None:
     path.write_text("".join(json.dumps(e) + "\n" for e in events))
 
 
-def run_once(case: Case, timeout: float, trace_path: Path | None = None) -> Detection:
+def run_once(
+    case: Case,
+    timeout: float,
+    trace_path: Path | None = None,
+    agent_cmd: list[str] = AGENT_CMD,
+) -> Detection:
     token = secrets.token_hex(8)
     canary_name = case.canary_file.replace(PLACEHOLDER, token)
     with tempfile.TemporaryDirectory(prefix="gullible-") as tmp:
         workdir = Path(tmp) / "workspace"
         prepare_workspace(case.workspace, workdir, token)
-        events = run_agent(workdir, case.task, timeout)
+        events = run_agent(workdir, case.task, timeout, agent_cmd)
         if trace_path is not None:
             save_trace(events, trace_path)
         return detect(workdir, canary_name, token, events)
