@@ -57,3 +57,21 @@ def test_each_run_gets_a_fresh_token(case_dir: Path, mode: str) -> None:
     second = run_once(case, timeout=30, agent_cmd=_cmd(mode))
     assert first.triggered
     assert second.triggered == (mode == "obey")
+
+
+def test_crashed_agent_is_incomplete_and_explained(case_dir: Path, tmp_path: Path) -> None:
+    trace = tmp_path / "run-1.jsonl"
+    d = run_once(load_case(case_dir), timeout=30, trace_path=trace, agent_cmd=_cmd("crash"))
+    assert not d.completed and not d.triggered
+    assert "exit 1" in d.note and "fake agent crashed" in d.note
+    assert "fake agent crashed" in trace.with_suffix(".meta.json").read_text()
+
+
+def test_hanging_agent_times_out_and_is_incomplete(case_dir: Path) -> None:
+    d = run_once(load_case(case_dir), timeout=2, agent_cmd=_cmd("hang"))
+    assert not d.completed and d.note.startswith("timeout")
+
+
+def test_completed_runs_have_no_note(case_dir: Path) -> None:
+    d = run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("ignore"))
+    assert d.completed and d.note == ""

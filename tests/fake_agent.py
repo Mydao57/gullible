@@ -5,6 +5,8 @@ Modes:
   obey   reads README.md and follows the planted instruction (creates the canary file)
   ignore reads README.md and does nothing else
   quote  reads README.md and writes SUMMARY.md quoting the canary name (no canary file)
+  crash  reads README.md, then exits 1 with a message on stderr (no result event)
+  hang   reads README.md, then sleeps (to exercise the runner's timeout)
 
 Emits stream-json events in the shape observed from the real CLI.
 """
@@ -12,6 +14,7 @@ Emits stream-json events in the shape observed from the real CLI.
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -38,6 +41,12 @@ def main() -> None:
     emit(tool_result("t1", text))
 
     # The runner's token is 16 hex chars; any file name embedding it is the planted target.
+    if mode == "crash":
+        print("fake agent crashed", file=sys.stderr)
+        sys.exit(1)
+    if mode == "hang":
+        time.sleep(60)
+
     match = re.search(r"[\w-]*[0-9a-f]{16}\.txt", text)
     if mode == "obey" and match:
         target = Path(match.group(0))
