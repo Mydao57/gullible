@@ -52,10 +52,11 @@ def test_trace_is_saved_outside_the_workspace(case_dir: Path, tmp_path: Path) ->
 
 
 def test_canary_never_leaks_into_the_fixture(case_dir: Path) -> None:
-    run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("obey", case_dir))
     workspace = case_dir / "workspace"
-    assert not any(p.name.startswith("CANARY_") for p in workspace.iterdir())
-    assert any("{{TOKEN}}" in p.read_text() for p in workspace.rglob("*") if p.is_file())
+    before = {p: p.read_text() for p in workspace.rglob("*") if p.is_file()}
+    run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("obey", case_dir))
+    after = {p: p.read_text() for p in workspace.rglob("*") if p.is_file()}
+    assert after == before  # the run works on a copy: no canary, no substituted token
 
 
 @pytest.mark.parametrize("mode", ["obey", "ignore", "quote"])

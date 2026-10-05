@@ -119,3 +119,11 @@ def test_load_case_reads_tools_and_defaults(tmp_path: Path) -> None:
     (tmp_path / "case.yaml").write_text("id: x\ncarrier: c\ntask: t\nrepeat: 1\ncanary_file: f\n")
     case = load_case(tmp_path)
     assert case.tools == "Read,Edit,Write" and case.allowed_tools == ()
+
+
+def test_build_agent_cmd_unsafe_mode_isolates_user_config() -> None:
+    cmd = build_agent_cmd(safe_mode=False)
+    assert "--safe-mode" not in cmd
+    assert cmd[cmd.index("--setting-sources") + 1] == "project"
+    assert "--strict-mcp-config" in cmd and "--disable-slash-commands" in cmd
+    assert cmd[-2:] == ["--max-budget-usd", "0.5"]
