@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gullible.runner import Detection, detect, parse_events, prepare_workspace, save_trace, summarize
+from gullible.runner import Detection, build_agent_cmd, detect, load_case, parse_events, prepare_workspace, save_trace, summarize
 
 TOKEN = "abc123"
 CANARY = f"CANARY_{TOKEN}.txt"
@@ -94,3 +94,28 @@ def test_summarize_excludes_incomplete_runs_that_did_not_trigger() -> None:
 
 def test_summarize_with_no_valid_run() -> None:
     assert "no valid run (2 incomplete)" in summarize("c", [Detection(False, False, False, completed=False)] * 2)
+
+
+def test_build_agent_cmd_default_has_no_bash_and_task_slot_is_free() -> None:
+    cmd = build_agent_cmd()
+    assert cmd[cmd.index("--tools") + 1] == "Read,Edit,Write"
+    assert "--allowedTools" not in cmd
+    assert cmd[-2:] == ["--max-budget-usd", "0.5"]  # last option is not variadic
+
+
+def test_build_agent_cmd_with_allowed_tools_keeps_variadic_flags_out_of_last_position() -> None:
+    cmd = build_agent_cmd("Read,Bash", ("Bash(./check.sh)",))
+    i = cmd.index("--allowedTools")
+    assert cmd[i + 1] == "Bash(./check.sh)" and cmd[i + 2].startswith("--")
+    assert cmd[-2:] == ["--max-budget-usd", "0.5"]
+
+
+def test_load_case_reads_tools_and_defaults(tmp_path: Path) -> None:
+    (tmp_path / "case.yaml").write_text(
+        "id: x\ncarrier: c\ntask: t\nrepeat: 1\ncanary_file: f\ntools: Read,Bash\nallowed_tools: ['Bash(ls)']\n"
+    )
+    case = load_case(tmp_path)
+    assert case.tools == "Read,Bash" and case.allowed_tools == ("Bash(ls)",)
+    (tmp_path / "case.yaml").write_text("id: x\ncarrier: c\ntask: t\nrepeat: 1\ncanary_file: f\n")
+    case = load_case(tmp_path)
+    assert case.tools == "Read,Edit,Write" and case.allowed_tools == ()

@@ -17,18 +17,24 @@ import yaml
 
 PLACEHOLDER = "{{TOKEN}}"
 
-# Flags observed in `claude --help` (v2.1.236). stream-json requires --verbose in print mode.
-AGENT_CMD = [
-    "claude",
-    "-p",
-    "--safe-mode",
-    "--permission-mode", "acceptEdits",
-    "--tools", "Read,Edit,Write",
-    "--output-format", "stream-json",
-    "--verbose",
-    "--no-session-persistence",
-    "--max-budget-usd", "0.5",
-]
+DEFAULT_TOOLS = "Read,Edit,Write"
+
+
+def build_agent_cmd(tools: str = DEFAULT_TOOLS, allowed_tools: tuple[str, ...] = ()) -> list[str]:
+    """Flags observed in `claude --help` (v2.1.236). stream-json requires --verbose in print mode.
+
+    --tools and --allowedTools take a variable number of values, so neither may be the last
+    option: the runner appends the task as the final positional argument.
+    """
+    cmd = ["claude", "-p", "--safe-mode", "--permission-mode", "acceptEdits", "--tools", tools]
+    if allowed_tools:
+        cmd += ["--allowedTools", *allowed_tools]
+    return cmd + [
+        "--output-format", "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--max-budget-usd", "0.5",
+    ]
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,8 @@ class Case:
     repeat: int
     canary_file: str  # may contain {{TOKEN}}
     workspace: Path
+    tools: str = DEFAULT_TOOLS  # built-in tools the agent gets
+    allowed_tools: tuple[str, ...] = ()  # permission rules that skip the prompt, e.g. "Bash(./check.sh)"
 
 
 @dataclass(frozen=True)
@@ -63,6 +71,8 @@ def load_case(case_dir: Path) -> Case:
         repeat=int(data["repeat"]),
         canary_file=data["canary_file"],
         workspace=case_dir / "workspace",
+        tools=data.get("tools", DEFAULT_TOOLS),
+        allowed_tools=tuple(data.get("allowed_tools", ())),
     )
 
 
@@ -148,13 +158,14 @@ class AgentRun:
 
 
 def run_agent(
-    workdir: Path, task: str, timeout: float, agent_cmd: list[str] = AGENT_CMD
+    workdir: Path, task: str, timeout: float, agent_cmd: list[str] | None = None
 ) -> AgentRun:
     """Run the agent with cwd=workdir and return its trace (partial on timeout).
     agent_cmd is overridable so tests can swap in a scripted fake agent."""
+    cmd = agent_cmd if agent_cmd is not None else build_agent_cmd()
     try:
         proc = subprocess.run(
-            [*agent_cmd, task],
+            [*cmd, task],
             cwd=workdir,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -177,14 +188,15 @@ def run_once(
     case: Case,
     timeout: float,
     trace_path: Path | None = None,
-    agent_cmd: list[str] = AGENT_CMD,
+    agent_cmd: list[str] | None = None,
 ) -> Detection:
     token = secrets.token_hex(8)
     canary_name = case.canary_file.replace(PLACEHOLDER, token)
     with tempfile.TemporaryDirectory(prefix="gullible-") as tmp:
         workdir = Path(tmp) / "workspace"
         prepare_workspace(case.workspace, workdir, token)
-        run = run_agent(workdir, case.task, timeout, agent_cmd)
+        cmd = agent_cmd if agent_cmd is not None else build_agent_cmd(case.tools, case.allowed_tools)
+        run = run_agent(workdir, case.task, timeout, cmd)
         if trace_path is not None:
             save_trace(run.events, trace_path)
             meta = {"timed_out": run.timed_out, "returncode": run.returncode, "stderr": run.stderr}
