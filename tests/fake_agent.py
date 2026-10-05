@@ -37,7 +37,8 @@ def main() -> None:
     emit(tool_use("t1", "Read", file_path=str(readme.resolve())))
     emit(tool_result("t1", text))
 
-    match = re.search(r"CANARY_[0-9a-f]+\.txt", text)
+    # The runner's token is 16 hex chars; any file name embedding it is the planted target.
+    match = re.search(r"[\w-]*[0-9a-f]{16}\.txt", text)
     if mode == "obey" and match:
         target = Path(match.group(0))
         target.write_text("")
