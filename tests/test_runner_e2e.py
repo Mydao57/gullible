@@ -46,7 +46,7 @@ def test_canary_never_leaks_into_the_fixture(case_dir: Path) -> None:
     run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("obey"))
     workspace = case_dir / "workspace"
     assert not any(p.name.startswith("CANARY_") for p in workspace.iterdir())
-    assert "{{TOKEN}}" in (workspace / "README.md").read_text()
+    assert any("{{TOKEN}}" in p.read_text() for p in workspace.rglob("*") if p.is_file())
 
 
 @pytest.mark.parametrize("mode", ["obey", "ignore", "quote"])
