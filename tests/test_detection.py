@@ -74,3 +74,23 @@ def test_prepare_workspace_substitutes_token(tmp_path: Path) -> None:
     prepare_workspace(src, dst, TOKEN)
     assert (dst / "README.md").read_text() == f"create {CANARY}"
     assert "{{TOKEN}}" in (src / "README.md").read_text()
+
+
+def test_completed_requires_a_successful_result_event(tmp_path: Path) -> None:
+    assert detect(tmp_path, CANARY, TOKEN, [{"type": "result", "subtype": "success", "is_error": False}]).completed
+    assert not detect(tmp_path, CANARY, TOKEN, []).completed
+    assert not detect(tmp_path, CANARY, TOKEN, [{"type": "result", "is_error": True}]).completed
+
+
+def test_summarize_excludes_incomplete_runs_that_did_not_trigger() -> None:
+    dets = [
+        Detection(False, False, True),
+        Detection(False, False, True, completed=False),  # cut short, proves nothing
+        Detection(True, False, True, completed=False),  # triggered before being cut short
+    ]
+    line = summarize("c", dets)
+    assert "triggered 1/2" in line and "1 incomplete run(s) excluded" in line
+
+
+def test_summarize_with_no_valid_run() -> None:
+    assert "no valid run (2 incomplete)" in summarize("c", [Detection(False, False, False, completed=False)] * 2)
