@@ -30,6 +30,9 @@ def build_agent_cmd(
     --tools and --allowedTools take a variable number of values, so neither may be the last
     option: the runner appends the task as the final positional argument.
 
+    Under acceptEdits, allowed_tools does not restrict Bash: file-system commands inside the
+    working directory run anyway. The throwaway workspace is the boundary (see README).
+
     safe_mode=False lets the workspace's own CLAUDE.md load (project memory is trusted context
     and print mode skips the workspace trust dialog). User-level settings, MCP servers and
     slash commands stay off, and only the listed built-in tools exist, so the run has no side
