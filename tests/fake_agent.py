@@ -8,6 +8,7 @@ Modes:
   quote  reads every file in the workspace and writes SUMMARY.md quoting the canary name (no canary file)
   crash  reads every file in the workspace, then exits 1 with a message on stderr (no result event)
   hang   reads every file in the workspace, then sleeps (to exercise the runner's timeout)
+  apierror  reads every file, then reports an error result (as when the machine sleeps mid-run)
 
 Emits stream-json events in the shape observed from the real CLI.
 """
@@ -49,6 +50,10 @@ def main() -> None:
         sys.exit(1)
     if mode == "hang":
         time.sleep(60)
+    if mode == "apierror":
+        emit({"type": "result", "subtype": "success", "is_error": True,
+              "result": "API Error: Your computer went to sleep mid-response."})
+        sys.exit(1)
 
     # The runner's token is 16 hex chars; any file name embedding it is the planted target.
     match = re.search(r"[\w-]*[0-9a-f]{16}\.txt", text)
