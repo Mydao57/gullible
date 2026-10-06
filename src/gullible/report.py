@@ -146,6 +146,14 @@ def render_run(r: RunRecord, show_stamp: bool = False) -> str:
     )
 
 
+def anchor(row: dict[str, Any]) -> str:
+    return row["id"] + (f"--{row['model']}" if row.get("model") else "")
+
+
+def model_tag(row: dict[str, Any]) -> str:
+    return f' <span class="muted">{esc(row["model"])}</span>' if row.get("model") else ""
+
+
 def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord], show_stamp: bool = False) -> str:
     chips = "".join(
         f'<span class="chip {"incomplete" if not r.completed and not r.triggered else "hit" if r.triggered else "miss"}"'
@@ -155,19 +163,25 @@ def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord], s
     task = f"<p><b>Task:</b> {esc(case.task)}</p>" if case else ""
     canary = f"<p><b>Canary file:</b> <code>{esc(case.canary_file)}</code></p>" if case else ""
     body = "".join(render_run(r, show_stamp) for r in runs) or "<p class='muted'>No trace found for this case.</p>"
-    name = esc(row["id"]) + (' <span class="pill ctl">control</span>' if row.get("control") else "")
+    name = esc(row["id"]) + model_tag(row) + (' <span class="pill ctl">control</span>' if row.get("control") else "")
     return (
-        f'<section class="case" id="{esc(row["id"])}"><h3>{name}</h3>'
+        f'<section class="case" id="{esc(anchor(row))}"><h3>{name}</h3>'
         f'<p class="muted">{esc(row["carrier"])}</p>{task}{canary}<div class="chips">{chips}</div>{body}</section>'
     )
 
 
+def row_key(row: dict[str, Any]) -> tuple[str, str]:
+    """A case is identified by its id and, when the summary records it, the model."""
+    return (row["id"], row.get("model", ""))
+
+
 def merge_rows(row_sets: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Add up the counts of the same case across summaries and recompute its interval."""
-    merged: dict[str, dict[str, Any]] = {}
+    """Add up the counts of the same case across summaries and recompute its interval.
+    Results from different models are never pooled; summaries without a model merge by id."""
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
     for rows in row_sets:
         for r in rows:
-            m = merged.setdefault(r["id"], {**r, "total": 0, "valid": 0, "triggered": 0, "trap_seen": 0})
+            m = merged.setdefault(row_key(r), {**r, "total": 0, "valid": 0, "triggered": 0, "trap_seen": 0})
             for key in ("total", "valid", "triggered", "trap_seen"):
                 m[key] += r[key]
     for m in merged.values():
@@ -178,7 +192,7 @@ def merge_rows(row_sets: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
 
 def render_report(
     rows: list[dict[str, Any]],
-    runs_by_case: dict[str, list[RunRecord]],
+    runs_by_case: dict[tuple[str, str], list[RunRecord]],
     cases: dict[str, Case],
     stamp: str,
     show_stamp: bool = False,
@@ -193,7 +207,7 @@ def render_report(
         valid = r["valid"]
         rate = r["triggered"] / valid if valid else 0.0
         cell = f"{r['triggered']}/{valid} ({pct(rate)})" if valid else "n/a"
-        name = f'<a href="#{esc(r["id"])}">{esc(r["id"])}</a>'
+        name = f'<a href="#{esc(anchor(r))}">{esc(r["id"])}</a>' + model_tag(r)
         if r.get("control"):
             name += ' <span class="pill ctl">control</span>'
         cls = " hot" if valid and rate >= 0.5 and not r.get("control") else ""
@@ -203,7 +217,7 @@ def render_report(
             f'<td class="num">{cell}</td><td class="cibox">{bar}<span class="muted">{pct(r["ci_low"])} to {pct(r["ci_high"])}</span></td>'
             f'<td class="num">{r["trap_seen"]}/{valid}</td></tr>'
         )
-    details = "".join(render_case(r, cases.get(r["id"]), runs_by_case.get(r["id"], []), show_stamp) for r in ordered)
+    details = "".join(render_case(r, cases.get(r["id"]), runs_by_case.get(row_key(r), []), show_stamp) for r in ordered)
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     return TEMPLATE.format(
         stamp=esc(stamp),
@@ -231,10 +245,11 @@ def build(results_dir: Path, summaries: Path | list[Path], fixtures_dir: Path) -
     paths = [summaries] if isinstance(summaries, Path) else sorted(summaries)
     rows = merge_rows([json.loads(p.read_text()) for p in paths])
     cases = {c.id: c for c in (load_case(d) for d in discover_cases(fixtures_dir))} if fixtures_dir.exists() else {}
-    runs: dict[str, list[RunRecord]] = {r["id"]: [] for r in rows}
+    runs: dict[tuple[str, str], list[RunRecord]] = {row_key(r): [] for r in rows}
     for path in paths:
         for r in json.loads(path.read_text()):
-            runs[r["id"]] += load_runs(results_dir / r["id"] / stamp_of(path), cases.get(r["id"]))
+            records = load_runs(results_dir / r["id"] / stamp_of(path), cases.get(r["id"]))
+            runs[row_key(r)] += [x for x in records if not r.get("model") or x.model == r["model"]]
     label = stamp_of(paths[0]) if len(paths) == 1 else f"{len(paths)} run sets ({', '.join(stamp_of(p) for p in paths)})"
     return render_report(rows, runs, cases, label, show_stamp=len(paths) > 1)
 

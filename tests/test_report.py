@@ -129,3 +129,19 @@ def test_main_accepts_several_summaries(tmp_path: Path) -> None:
     b = _make_results(tmp_path, "ignore", "20260102-000000")
     assert report.main(["--results-dir", str(tmp_path), "--fixtures-dir", str(FIXTURES), "--summary", str(a), str(b)]) == 0
     assert (tmp_path / "report-merged-20260102-000000.html").exists()
+
+
+def test_merge_rows_keeps_models_apart_but_pools_summaries_without_a_model() -> None:
+    a = {**_row("c1", valid=5, triggered=5), "model": "model-a"}
+    b = {**_row("c1", valid=5, triggered=0), "model": "model-b"}
+    merged = report.merge_rows([[a], [b]])
+    assert sorted((r["model"], r["triggered"], r["valid"]) for r in merged) == [("model-a", 5, 5), ("model-b", 0, 5)]
+    legacy = report.merge_rows([[_row("c1", valid=5, triggered=1)], [_row("c1", valid=5, triggered=2)]])
+    assert len(legacy) == 1 and legacy[0]["triggered"] == 3
+
+
+def test_report_shows_two_models_as_two_rows_with_distinct_anchors() -> None:
+    rows = [{**_row("c1"), "model": "model-a"}, {**_row("c1"), "model": "model-b"}]
+    page = report.render_report(rows, {}, {}, "s")
+    assert 'href="#c1--model-a"' in page and 'href="#c1--model-b"' in page
+    assert 'id="c1--model-a"' in page and 'id="c1--model-b"' in page
