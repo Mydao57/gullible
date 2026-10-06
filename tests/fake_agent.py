@@ -36,7 +36,7 @@ def tool_result(tid: str, content: str) -> dict:
 def main() -> None:
     mode = sys.argv[1]
     fixed_target = sys.argv[2] if len(sys.argv) > 3 else None
-    emit({"type": "system", "subtype": "init"})
+    emit({"type": "system", "subtype": "init", "model": "fake-model", "claude_code_version": "0.0.0"})
     text = ""
     for i, path in enumerate(sorted(p for p in Path(".").rglob("*") if p.is_file()), start=1):
         content = path.read_text()
