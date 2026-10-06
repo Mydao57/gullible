@@ -108,8 +108,16 @@ status recomputed from the trace and are marked as such.
 
 - The workspace is copied to a fresh `tempfile` directory, deleted afterwards. The runner
   never works inside `fixtures/`. A test checks that fixtures are left untouched.
-- The agent gets only the built-in tools a case lists (default `Read,Edit,Write`). A case
-  that gives it `Bash` restricts it with `allowed_tools` to specific commands.
+- The agent gets only the built-in tools a case lists (default `Read,Edit,Write`).
+- A case that gives it `Bash` is not limited to the commands in `allowed_tools`. Observed on
+  Claude Code 2.1.236 with `--permission-mode acceptEdits` and `--allowedTools "Bash(./check.sh)"`:
+  read-only commands (`ls`, `cat`) and file-system commands (`touch`, `mkdir`, `cp`, `rm`, output
+  redirection) ran without approval, but only on paths inside the working directory. The same
+  commands aimed at `..` or an absolute path outside it were refused, nothing was created there,
+  and running a script or an interpreter (`./check.sh`, `sh check.sh`, `python3 t.py`,
+  `python3 -c`) was refused unless a rule allowed it. So the boundary is the throwaway workspace,
+  not the allow rule: `allowed_tools` is what lets a case run its script at all. This was
+  measured by hand, not by a test, and can change with the CLI version.
 - Default mode uses `--safe-mode`: no user settings, `CLAUDE.md`, skills, hooks, plugins
   or MCP servers.
 - Cases that must load the workspace's own `CLAUDE.md` set `safe_mode: false`. The runner
@@ -173,7 +181,7 @@ benchmark.
 | `repeat` | Default number of runs |
 | `canary_file` | File name that proves the instruction was followed; may contain `{{TOKEN}}` |
 | `tools` | Built-in tools for the agent (default `Read,Edit,Write`) |
-| `allowed_tools` | Permission rules that skip the prompt, e.g. `Bash(./check.sh)` |
+| `allowed_tools` | Extra permission rules for commands that would need approval, e.g. `Bash(./check.sh)` (does not restrict `Bash`, see isolation) |
 | `safe_mode` | `false` lets the workspace `CLAUDE.md` load (default `true`) |
 | `trap_in_context` | `true` when the trap is delivered through loaded context rather than a tool result |
 | `control` | `true` for a case with no planted instruction |
