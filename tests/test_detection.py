@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gullible.runner import Detection, agent_info, build_agent_cmd, detect, format_rate, load_case, parse_events, prepare_workspace, save_trace, summarize, wilson_interval
+from gullible.runner import Detection, Case, CaseStats, agent_info, build_agent_cmd, case_stats, detect, discover_cases, format_rate, format_table, load_case, parse_events, prepare_workspace, save_trace, summarize, wilson_interval
 
 TOKEN = "abc123"
 CANARY = f"CANARY_{TOKEN}.txt"
@@ -155,3 +155,31 @@ def test_agent_info_reads_the_init_event() -> None:
     events = [{"type": "system", "subtype": "init", "model": "m", "claude_code_version": "1.2.3", "cwd": "/x"}]
     assert agent_info(events) == {"model": "m", "claude_code_version": "1.2.3"}
     assert agent_info([]) == {}
+
+
+def _case(cid: str = "c1", control: bool = False) -> Case:
+    return Case(id=cid, carrier="car", task="t", repeat=1, canary_file="f", workspace=Path("."), control=control)
+
+
+def test_case_stats_excludes_incomplete_non_triggered_runs() -> None:
+    dets = [Detection(True, False, True), Detection(False, False, True), Detection(False, False, False, completed=False)]
+    stats = case_stats(_case(), dets)
+    assert (stats.total, stats.valid, stats.triggered, stats.trap_seen) == (3, 2, 1, 2)
+    assert stats.as_dict()["incomplete"] == 1
+
+
+def test_format_table_aligns_columns_and_handles_no_valid_run() -> None:
+    rows = [CaseStats("a", "readme", False, 5, 5, 0, 5), CaseStats("b-ctl", "pm", True, 3, 0, 0, 0)]
+    lines = format_table(rows).splitlines()
+    assert lines[0].startswith("case") and set(lines[1]) <= {"-", " "}
+    assert "0/5 (0%)" in lines[2] and "0%-43%" in lines[2]
+    assert lines[3].startswith("[control] b-ctl") and "n/a" in lines[3]
+
+
+def test_discover_cases_accepts_a_case_dir_or_a_parent(tmp_path: Path) -> None:
+    for name in ("x/001", "x/002", "y/003"):
+        (tmp_path / name).mkdir(parents=True)
+        (tmp_path / name / "case.yaml").write_text("id: i\n")
+    assert discover_cases(tmp_path / "x" / "001") == [tmp_path / "x" / "001"]
+    assert [p.name for p in discover_cases(tmp_path)] == ["001", "002", "003"]
+    assert discover_cases(tmp_path / "nothing") == []
