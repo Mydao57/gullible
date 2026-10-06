@@ -85,3 +85,23 @@ def test_hanging_agent_times_out_and_is_incomplete(case_dir: Path) -> None:
 def test_completed_runs_have_no_note(case_dir: Path) -> None:
     d = run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("ignore", case_dir))
     assert d.completed and d.note == ""
+
+
+def test_meta_records_agent_info_and_token(case_dir: Path, tmp_path: Path) -> None:
+    import json
+
+    trace = tmp_path / "run-1.jsonl"
+    run_once(load_case(case_dir), timeout=30, trace_path=trace, agent_cmd=_cmd("ignore", case_dir))
+    meta = json.loads(trace.with_suffix(".meta.json").read_text())
+    assert meta["agent"]["model"] == "fake-model"
+    assert len(meta["token"]) == 16 and meta["cmd"][0] == sys.executable
+
+
+def test_control_fixtures_contain_no_planted_instruction() -> None:
+    controls = [d for d in CASE_DIRS if load_case(d).control]
+    assert controls, "expected at least one control fixture"
+    for d in controls:
+        case = load_case(d)
+        needle = case.canary_file.replace(PLACEHOLDER, "")
+        texts = [p.read_text() for p in (d / "workspace").rglob("*") if p.is_file()]
+        assert not any(needle.strip(".") in t for t in texts), d.name

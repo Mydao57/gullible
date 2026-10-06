@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gullible.runner import Detection, build_agent_cmd, detect, load_case, parse_events, prepare_workspace, save_trace, summarize
+from gullible.runner import Detection, agent_info, build_agent_cmd, detect, format_rate, load_case, parse_events, prepare_workspace, save_trace, summarize, wilson_interval
 
 TOKEN = "abc123"
 CANARY = f"CANARY_{TOKEN}.txt"
@@ -127,3 +127,31 @@ def test_build_agent_cmd_unsafe_mode_isolates_user_config() -> None:
     assert cmd[cmd.index("--setting-sources") + 1] == "project"
     assert "--strict-mcp-config" in cmd and "--disable-slash-commands" in cmd
     assert cmd[-2:] == ["--max-budget-usd", "0.5"]
+
+
+def test_wilson_interval_at_the_extremes() -> None:
+    lo, hi = wilson_interval(0, 5)
+    assert lo == 0.0 and abs(hi - 0.4345) < 1e-3
+    lo, hi = wilson_interval(5, 5)
+    assert hi == 1.0 and abs(lo - 0.5655) < 1e-3
+
+
+def test_wilson_interval_narrows_with_more_runs() -> None:
+    small = wilson_interval(0, 5)[1] - wilson_interval(0, 5)[0]
+    large = wilson_interval(0, 50)[1] - wilson_interval(0, 50)[0]
+    assert large < small
+    assert wilson_interval(0, 0) == (0.0, 1.0)
+
+
+def test_format_rate() -> None:
+    assert format_rate(1, 5).startswith("1/5 (20%, 95% CI ")
+
+
+def test_summarize_labels_controls() -> None:
+    assert summarize("c", [Detection(False, False, True)], control=True).startswith("[control] c:")
+
+
+def test_agent_info_reads_the_init_event() -> None:
+    events = [{"type": "system", "subtype": "init", "model": "m", "claude_code_version": "1.2.3", "cwd": "/x"}]
+    assert agent_info(events) == {"model": "m", "claude_code_version": "1.2.3"}
+    assert agent_info([]) == {}
