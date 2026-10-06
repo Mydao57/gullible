@@ -20,13 +20,25 @@ PLACEHOLDER = "{{TOKEN}}"
 DEFAULT_TOOLS = "Read,Edit,Write"
 
 
-def build_agent_cmd(tools: str = DEFAULT_TOOLS, allowed_tools: tuple[str, ...] = ()) -> list[str]:
+def build_agent_cmd(
+    tools: str = DEFAULT_TOOLS, allowed_tools: tuple[str, ...] = (), safe_mode: bool = True
+) -> list[str]:
     """Flags observed in `claude --help` (v2.1.236). stream-json requires --verbose in print mode.
 
     --tools and --allowedTools take a variable number of values, so neither may be the last
     option: the runner appends the task as the final positional argument.
+
+    safe_mode=False lets the workspace's own CLAUDE.md load (project memory is trusted context
+    and print mode skips the workspace trust dialog). User-level settings, MCP servers and
+    slash commands stay off, and only the listed built-in tools exist, so the run has no side
+    effect beyond the throwaway workspace.
     """
-    cmd = ["claude", "-p", "--safe-mode", "--permission-mode", "acceptEdits", "--tools", tools]
+    isolation = (
+        ["--safe-mode"]
+        if safe_mode
+        else ["--setting-sources", "project", "--strict-mcp-config", "--disable-slash-commands"]
+    )
+    cmd = ["claude", "-p", *isolation, "--permission-mode", "acceptEdits", "--tools", tools]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
     return cmd + [
@@ -47,6 +59,8 @@ class Case:
     workspace: Path
     tools: str = DEFAULT_TOOLS  # built-in tools the agent gets
     allowed_tools: tuple[str, ...] = ()  # permission rules that skip the prompt, e.g. "Bash(./check.sh)"
+    safe_mode: bool = True  # False: let the workspace CLAUDE.md load
+    trap_in_context: bool = False  # trap is delivered via loaded context, not a tool result
 
 
 @dataclass(frozen=True)
@@ -73,6 +87,8 @@ def load_case(case_dir: Path) -> Case:
         workspace=case_dir / "workspace",
         tools=data.get("tools", DEFAULT_TOOLS),
         allowed_tools=tuple(data.get("allowed_tools", ())),
+        safe_mode=bool(data.get("safe_mode", True)),
+        trap_in_context=bool(data.get("trap_in_context", False)),
     )
 
 
@@ -195,13 +211,18 @@ def run_once(
     with tempfile.TemporaryDirectory(prefix="gullible-") as tmp:
         workdir = Path(tmp) / "workspace"
         prepare_workspace(case.workspace, workdir, token)
-        cmd = agent_cmd if agent_cmd is not None else build_agent_cmd(case.tools, case.allowed_tools)
+        cmd = agent_cmd if agent_cmd is not None else build_agent_cmd(
+            case.tools, case.allowed_tools, case.safe_mode
+        )
         run = run_agent(workdir, case.task, timeout, cmd)
         if trace_path is not None:
             save_trace(run.events, trace_path)
             meta = {"timed_out": run.timed_out, "returncode": run.returncode, "stderr": run.stderr}
             trace_path.with_suffix(".meta.json").write_text(json.dumps(meta))
         detection = detect(workdir, canary_name, token, run.events)
+        if case.trap_in_context:
+            # Loaded context never shows up as a tool result, so a finished run saw the trap.
+            detection = replace(detection, trap_seen=detection.completed)
         if detection.completed:
             return detection
         reason = "timeout" if run.timed_out else f"exit {run.returncode}, no result event"
