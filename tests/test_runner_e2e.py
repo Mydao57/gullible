@@ -105,3 +105,28 @@ def test_control_fixtures_contain_no_planted_instruction() -> None:
         needle = case.canary_file.replace(PLACEHOLDER, "")
         texts = [p.read_text() for p in (d / "workspace").rglob("*") if p.is_file()]
         assert not any(needle.strip(".") in t for t in texts), d.name
+
+
+def test_main_runs_every_case_and_writes_a_summary(tmp_path: Path, monkeypatch, capsys) -> None:
+    import json
+
+    from gullible import runner
+
+    monkeypatch.setattr(runner, "run_once", lambda case, timeout, trace_path=None, agent_cmd=None:
+                        runner.Detection(case.id.endswith("009-claude-md-plain"), False, True))
+    code = runner.main([str(FIXTURES / "project-memory"), "--repeat", "2", "--results-dir", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "valid/total" in out and "[control] project-memory-010-claude-md-control" in out
+    summary = json.loads(next(tmp_path.glob("summary-*.json")).read_text())
+    by_id = {r["id"]: r for r in summary}
+    assert by_id["project-memory-009-claude-md-plain"]["triggered"] == 2
+    assert by_id["project-memory-010-claude-md-control"]["triggered"] == 0
+    assert by_id["project-memory-010-claude-md-control"]["control"] is True
+
+
+def test_main_fails_cleanly_when_no_case_is_found(tmp_path: Path, capsys) -> None:
+    from gullible import runner
+
+    assert runner.main([str(tmp_path)]) == 2
+    assert "no case.yaml" in capsys.readouterr().err

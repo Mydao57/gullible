@@ -8,6 +8,7 @@ import math
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -265,12 +266,16 @@ def format_rate(k: int, n: int) -> str:
     return f"{k}/{n} ({k / n:.0%}, 95% CI {lo:.0%}-{hi:.0%})"
 
 
-def summarize(case_id: str, detections: list[Detection], control: bool = False) -> str:
+def split_valid(detections: list[Detection]) -> tuple[list[Detection], int]:
     """An incomplete run that did not trigger proves nothing, so it leaves the denominator.
-    One that triggered before being cut short still counts."""
-    label = f"[control] {case_id}" if control else case_id
-    incomplete = sum(not d.completed and not d.triggered for d in detections)
+    One that triggered before being cut short still counts. Returns (valid runs, excluded)."""
     valid = [d for d in detections if d.completed or d.triggered]
+    return valid, len(detections) - len(valid)
+
+
+def summarize(case_id: str, detections: list[Detection], control: bool = False) -> str:
+    label = f"[control] {case_id}" if control else case_id
+    valid, incomplete = split_valid(detections)
     n = len(valid)
     if n == 0:
         return f"{label}: no valid run ({incomplete} incomplete)"
@@ -285,9 +290,58 @@ def summarize(case_id: str, detections: list[Detection], control: bool = False) 
     return line
 
 
+@dataclass(frozen=True)
+class CaseStats:
+    id: str
+    carrier: str
+    control: bool
+    total: int  # runs attempted
+    valid: int  # runs that count (see split_valid)
+    triggered: int
+    trap_seen: int
+
+    def as_dict(self) -> dict[str, Any]:
+        lo, hi = wilson_interval(self.triggered, self.valid)
+        return {**self.__dict__, "incomplete": self.total - self.valid, "ci_low": lo, "ci_high": hi}
+
+
+def case_stats(case: Case, detections: list[Detection]) -> CaseStats:
+    valid, _ = split_valid(detections)
+    return CaseStats(
+        id=case.id,
+        carrier=case.carrier,
+        control=case.control,
+        total=len(detections),
+        valid=len(valid),
+        triggered=sum(d.triggered for d in valid),
+        trap_seen=sum(d.trap_seen for d in valid),
+    )
+
+
+def format_table(rows: list[CaseStats]) -> str:
+    header = ("case", "carrier", "valid/total", "triggered", "95% CI", "trap seen")
+    body = []
+    for r in rows:
+        lo, hi = wilson_interval(r.triggered, r.valid)
+        rate = f"{r.triggered}/{r.valid} ({r.triggered / r.valid:.0%})" if r.valid else "n/a"
+        ci = f"{lo:.0%}-{hi:.0%}" if r.valid else "n/a"
+        name = f"[control] {r.id}" if r.control else r.id
+        body.append((name, r.carrier, f"{r.valid}/{r.total}", rate, ci, f"{r.trap_seen}/{r.valid}"))
+    widths = [max(len(row[c]) for row in [header, *body]) for c in range(len(header))]
+    lines = ["  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip() for row in [header, *body]]
+    return "\n".join([lines[0], "  ".join("-" * w for w in widths), *lines[1:]])
+
+
+def discover_cases(path: Path) -> list[Path]:
+    """A case directory, or any directory containing case directories (found recursively)."""
+    if (path / "case.yaml").exists():
+        return [path]
+    return sorted(p.parent for p in path.rglob("case.yaml"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gullible.runner")
-    parser.add_argument("case_dir", type=Path)
+    parser.add_argument("path", type=Path, help="a case directory, or a directory of cases (e.g. fixtures/)")
     parser.add_argument("--timeout", type=float, default=180.0, help="seconds per run")
     parser.add_argument("--repeat", type=int, default=None,
                         help="runs per case (default: the case's own `repeat`)")
@@ -295,18 +349,31 @@ def main(argv: list[str] | None = None) -> int:
                         help="where traces are saved (default: results/)")
     args = parser.parse_args(argv)
 
-    case = load_case(args.case_dir)
-    repeat = args.repeat if args.repeat is not None else case.repeat
-    run_dir = args.results_dir / case.id / datetime.now().strftime("%Y%m%d-%H%M%S")
-    detections = []
-    for i in range(1, repeat + 1):
-        d = run_once(case, args.timeout, run_dir / f"run-{i}.jsonl")
-        detections.append(d)
-        status = "" if d.completed else f" INCOMPLETE ({d.note})"
-        print(f"run {i}/{repeat}: file={d.file_created} "
-              f"token_in_calls={d.token_in_tool_calls} trap_seen={d.trap_seen}{status}")
-    print(summarize(case.id, detections, case.control))
-    print(f"traces: {run_dir}")
+    case_dirs = discover_cases(args.path)
+    if not case_dirs:
+        print(f"no case.yaml found under {args.path}", file=sys.stderr)
+        return 2
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    all_stats = []
+    for case_dir in case_dirs:
+        case = load_case(case_dir)
+        repeat = args.repeat if args.repeat is not None else case.repeat
+        run_dir = args.results_dir / case.id / stamp
+        detections = []
+        for i in range(1, repeat + 1):
+            d = run_once(case, args.timeout, run_dir / f"run-{i}.jsonl")
+            detections.append(d)
+            status = "" if d.completed else f" INCOMPLETE ({d.note})"
+            print(f"{case.id} run {i}/{repeat}: file={d.file_created} "
+                  f"token_in_calls={d.token_in_tool_calls} trap_seen={d.trap_seen}{status}", flush=True)
+        print(summarize(case.id, detections, case.control), flush=True)
+        all_stats.append(case_stats(case, detections))
+
+    print("\n" + format_table(all_stats))
+    summary_path = args.results_dir / f"summary-{stamp}.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps([r.as_dict() for r in all_stats], indent=2))
+    print(f"\nsummary: {summary_path}")
     return 0
 
 
