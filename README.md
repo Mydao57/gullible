@@ -98,7 +98,9 @@ After a run of the whole suite, build a static HTML page from the latest summary
 ```
 
 It writes `results/report-<timestamp>.html` (options: `--results-dir`, `--summary`,
-`--fixtures-dir`, `-o`). The page has the results table with a bar for each 95% interval,
+`--fixtures-dir`, `-o`). To cover several runner invocations in one page, pass their summaries:
+`--summary results/summary-A.json results/summary-B.json`. Counts add up per case, the interval is
+recomputed on the combined runs, and each run is tagged with the run set it came from. The page has the results table with a bar for each 95% interval,
 controls listed last, the model and CLI version, the total cost, and for every case each run
 with the agent's final message and the list of tool calls. Text taken from traces is
 HTML-escaped. Runs recorded before the detection was saved in `run-N.meta.json` get their

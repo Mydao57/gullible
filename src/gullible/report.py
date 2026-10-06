@@ -1,6 +1,9 @@
 """Build a static HTML report from a results directory (summary JSON plus run traces).
 
-Usage: python -m gullible.report [--results-dir results] [--summary FILE] [-o report.html]
+Usage: python -m gullible.report [--results-dir results] [--summary FILE ...] [-o report.html]
+
+Several summaries (one per runner invocation) are merged: counts add up per case and the
+confidence interval is recomputed on the combined runs.
 
 Everything that comes from a trace (the agent's own words, file names, commands) is
 untrusted text: it can contain planted markup. It is always HTML-escaped.
@@ -18,7 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from gullible.runner import ACTION_FIELDS, Case, discover_cases, load_case, parse_events, tool_calls
+from gullible.runner import (
+    ACTION_FIELDS, Case, discover_cases, load_case, parse_events, tool_calls, wilson_interval,
+)
 
 # Temp workspace prefix in traces, e.g. /private/var/folders/.../gullible-ab12cd/workspace/
 WORKSPACE_PREFIX = re.compile(r"\S*/gullible-[^/\s]+/workspace/?")
@@ -37,6 +42,7 @@ class RunRecord:
     note: str
     model: str
     cli_version: str
+    stamp: str = ""  # run set the record belongs to (several are shown when summaries are merged)
 
 
 def describe_call(block: dict[str, Any]) -> str:
@@ -70,6 +76,7 @@ def derive_status(
 
 def load_runs(run_dir: Path, case: Case | None) -> list[RunRecord]:
     records = []
+    stamp = run_dir.name
     for trace in sorted(run_dir.glob("run-*.jsonl"), key=lambda p: int(re.search(r"\d+", p.stem).group())):
         events = parse_events(trace.read_text())
         meta_path = trace.with_suffix(".meta.json")
@@ -100,6 +107,7 @@ def load_runs(run_dir: Path, case: Case | None) -> list[RunRecord]:
             note=note,
             model=str(agent.get("model", "")),
             cli_version=str(agent.get("claude_code_version", "")),
+            stamp=stamp,
         ))
     return records
 
@@ -121,23 +129,24 @@ def ci_bar(lo: float, hi: float, rate: float) -> str:
     )
 
 
-def render_run(r: RunRecord) -> str:
+def render_run(r: RunRecord, show_stamp: bool = False) -> str:
     if not r.completed and not r.triggered:
         status, label = "incomplete", "incomplete"
     else:
         status, label = ("hit", "followed it") if r.triggered else ("miss", "did not follow it")
     derived = ' <span class="muted">(status derived from the trace)</span>' if r.derived else ""
+    stamp_tag = f' <span class="muted">{esc(r.stamp)}</span>' if show_stamp else ""
     calls = "".join(f"<li><code>{esc(c)}</code></li>" for c in r.calls) or "<li class='muted'>no tool call</li>"
     note = f'<p class="muted">{esc(r.note)}</p>' if r.note else ""
     return (
-        f'<details class="run {status}"><summary><b>run {r.index}</b> '
+        f'<details class="run {status}"><summary><b>run {r.index}</b>{stamp_tag} '
         f'<span class="pill {status}">{label}</span> <span class="muted">${r.cost:.3f}</span>{derived}</summary>'
         f"{note}<p class='final'>{esc(r.final_text) or '<span class=muted>no final message</span>'}</p>"
         f"<ul class='calls'>{calls}</ul></details>"
     )
 
 
-def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord]) -> str:
+def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord], show_stamp: bool = False) -> str:
     chips = "".join(
         f'<span class="chip {"incomplete" if not r.completed and not r.triggered else "hit" if r.triggered else "miss"}"'
         f' title="run {r.index}"></span>'
@@ -145,7 +154,7 @@ def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord]) -
     )
     task = f"<p><b>Task:</b> {esc(case.task)}</p>" if case else ""
     canary = f"<p><b>Canary file:</b> <code>{esc(case.canary_file)}</code></p>" if case else ""
-    body = "".join(render_run(r) for r in runs) or "<p class='muted'>No trace found for this case.</p>"
+    body = "".join(render_run(r, show_stamp) for r in runs) or "<p class='muted'>No trace found for this case.</p>"
     name = esc(row["id"]) + (' <span class="pill ctl">control</span>' if row.get("control") else "")
     return (
         f'<section class="case" id="{esc(row["id"])}"><h3>{name}</h3>'
@@ -153,8 +162,26 @@ def render_case(row: dict[str, Any], case: Case | None, runs: list[RunRecord]) -
     )
 
 
+def merge_rows(row_sets: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Add up the counts of the same case across summaries and recompute its interval."""
+    merged: dict[str, dict[str, Any]] = {}
+    for rows in row_sets:
+        for r in rows:
+            m = merged.setdefault(r["id"], {**r, "total": 0, "valid": 0, "triggered": 0, "trap_seen": 0})
+            for key in ("total", "valid", "triggered", "trap_seen"):
+                m[key] += r[key]
+    for m in merged.values():
+        m["incomplete"] = m["total"] - m["valid"]
+        m["ci_low"], m["ci_high"] = wilson_interval(m["triggered"], m["valid"])
+    return list(merged.values())
+
+
 def render_report(
-    rows: list[dict[str, Any]], runs_by_case: dict[str, list[RunRecord]], cases: dict[str, Case], stamp: str
+    rows: list[dict[str, Any]],
+    runs_by_case: dict[str, list[RunRecord]],
+    cases: dict[str, Case],
+    stamp: str,
+    show_stamp: bool = False,
 ) -> str:
     all_runs = [r for rs in runs_by_case.values() for r in rs]
     models = sorted({f"{r.model} / CLI {r.cli_version}" for r in all_runs if r.model})
@@ -176,7 +203,7 @@ def render_report(
             f'<td class="num">{cell}</td><td class="cibox">{bar}<span class="muted">{pct(r["ci_low"])} to {pct(r["ci_high"])}</span></td>'
             f'<td class="num">{r["trap_seen"]}/{valid}</td></tr>'
         )
-    details = "".join(render_case(r, cases.get(r["id"]), runs_by_case.get(r["id"], [])) for r in ordered)
+    details = "".join(render_case(r, cases.get(r["id"]), runs_by_case.get(r["id"], []), show_stamp) for r in ordered)
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     return TEMPLATE.format(
         stamp=esc(stamp),
@@ -195,30 +222,41 @@ def latest_summary(results_dir: Path) -> Path | None:
     return found[-1] if found else None
 
 
-def build(results_dir: Path, summary: Path, fixtures_dir: Path) -> str:
-    stamp = re.fullmatch(r"summary-(.+)\.json", summary.name)
-    stamp_s = stamp.group(1) if stamp else summary.stem
-    rows = json.loads(summary.read_text())
+def stamp_of(summary: Path) -> str:
+    m = re.fullmatch(r"summary-(.+)\.json", summary.name)
+    return m.group(1) if m else summary.stem
+
+
+def build(results_dir: Path, summaries: Path | list[Path], fixtures_dir: Path) -> str:
+    paths = [summaries] if isinstance(summaries, Path) else sorted(summaries)
+    rows = merge_rows([json.loads(p.read_text()) for p in paths])
     cases = {c.id: c for c in (load_case(d) for d in discover_cases(fixtures_dir))} if fixtures_dir.exists() else {}
-    runs = {r["id"]: load_runs(results_dir / r["id"] / stamp_s, cases.get(r["id"])) for r in rows}
-    return render_report(rows, runs, cases, stamp_s)
+    runs: dict[str, list[RunRecord]] = {r["id"]: [] for r in rows}
+    for path in paths:
+        for r in json.loads(path.read_text()):
+            runs[r["id"]] += load_runs(results_dir / r["id"] / stamp_of(path), cases.get(r["id"]))
+    label = stamp_of(paths[0]) if len(paths) == 1 else f"{len(paths)} run sets ({', '.join(stamp_of(p) for p in paths)})"
+    return render_report(rows, runs, cases, label, show_stamp=len(paths) > 1)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gullible.report")
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
-    parser.add_argument("--summary", type=Path, default=None, help="default: the latest summary-*.json")
+    parser.add_argument("--summary", type=Path, nargs="+", default=None,
+                        help="one or more summary-*.json to merge (default: the latest one)")
     parser.add_argument("--fixtures-dir", type=Path, default=Path("fixtures"))
     parser.add_argument("-o", "--output", type=Path, default=None, help="default: <results-dir>/report-<stamp>.html")
     args = parser.parse_args(argv)
 
-    summary = args.summary or latest_summary(args.results_dir)
-    if summary is None or not summary.exists():
+    summaries = args.summary or ([latest_summary(args.results_dir)] if latest_summary(args.results_dir) else [])
+    if not summaries or not all(p.exists() for p in summaries):
         print(f"no summary-*.json in {args.results_dir}; run the runner first", file=sys.stderr)
         return 2
-    output = args.output or args.results_dir / summary.name.replace("summary-", "report-").replace(".json", ".html")
+    last = sorted(summaries)[-1]
+    name = last.name.replace("summary-", "report-merged-" if len(summaries) > 1 else "report-").replace(".json", ".html")
+    output = args.output or args.results_dir / name
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build(args.results_dir, summary, args.fixtures_dir))
+    output.write_text(build(args.results_dir, summaries if len(summaries) > 1 else summaries[0], args.fixtures_dir))
     print(f"report: {output}")
     return 0
 

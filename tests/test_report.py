@@ -16,10 +16,9 @@ def _row(cid: str = "c1", control: bool = False, valid: int = 4, triggered: int 
             "triggered": triggered, "trap_seen": valid, "incomplete": total - valid, "ci_low": lo, "ci_high": hi}
 
 
-def _make_results(tmp_path: Path, mode: str = "obey") -> Path:
+def _make_results(tmp_path: Path, mode: str = "obey", stamp: str = "20260101-000000") -> Path:
     """Produce a real trace + meta with the runner and the fake agent, then a matching summary."""
     case = load_case(CASE_DIR)
-    stamp = "20260101-000000"
     run_dir = tmp_path / case.id / stamp
     cmd = [sys.executable, str(FAKE_AGENT), mode, case.canary_file]
     detections = [run_once(case, 30, run_dir / f"run-{i}.jsonl", cmd) for i in (1, 2)]
@@ -97,3 +96,36 @@ def test_main_writes_the_latest_report_and_fails_without_a_summary(tmp_path: Pat
     _make_results(tmp_path)
     assert report.main(["--results-dir", str(tmp_path), "--fixtures-dir", str(FIXTURES)]) == 0
     assert (tmp_path / "report-20260101-000000.html").exists()
+
+
+def test_merge_rows_adds_counts_and_recomputes_the_interval() -> None:
+    a = [_row("c1", valid=5, triggered=0, total=5), _row("c2", valid=5, triggered=5, total=5)]
+    b = [_row("c1", valid=4, triggered=1, total=5)]
+    merged = {r["id"]: r for r in report.merge_rows([a, b])}
+    assert (merged["c1"]["total"], merged["c1"]["valid"], merged["c1"]["triggered"]) == (10, 9, 1)
+    assert merged["c1"]["incomplete"] == 1
+    lo, hi = runner.wilson_interval(1, 9)
+    assert (merged["c1"]["ci_low"], merged["c1"]["ci_high"]) == (lo, hi)
+    assert merged["c2"]["triggered"] == 5  # a case present in one summary only is kept
+
+
+def test_report_merges_several_run_sets(tmp_path: Path) -> None:
+    first = _make_results(tmp_path, "obey", "20260101-000000")
+    second = _make_results(tmp_path, "ignore", "20260102-000000")
+    page = report.build(tmp_path, [first, second], FIXTURES)
+    assert "2 run sets (20260101-000000, 20260102-000000)" in page
+    assert "2/4 (50%)" in page  # 2 followed in the first set, 0 in the second
+    assert page.count("run 1</b>") == 2  # same run index in both sets, told apart by their stamp
+    assert "20260102-000000</span>" in page
+
+
+def test_single_summary_report_does_not_show_stamps_per_run(tmp_path: Path) -> None:
+    page = report.build(tmp_path, _make_results(tmp_path), FIXTURES)
+    assert 'class="muted">20260101-000000</span> <span class="pill' not in page
+
+
+def test_main_accepts_several_summaries(tmp_path: Path) -> None:
+    a = _make_results(tmp_path, "obey", "20260101-000000")
+    b = _make_results(tmp_path, "ignore", "20260102-000000")
+    assert report.main(["--results-dir", str(tmp_path), "--fixtures-dir", str(FIXTURES), "--summary", str(a), str(b)]) == 0
+    assert (tmp_path / "report-merged-20260102-000000.html").exists()
