@@ -183,3 +183,17 @@ def test_discover_cases_accepts_a_case_dir_or_a_parent(tmp_path: Path) -> None:
     assert discover_cases(tmp_path / "x" / "001") == [tmp_path / "x" / "001"]
     assert [p.name for p in discover_cases(tmp_path)] == ["001", "002", "003"]
     assert discover_cases(tmp_path / "nothing") == []
+
+
+def test_build_agent_cmd_passes_the_model_and_keeps_the_task_slot_free() -> None:
+    cmd = build_agent_cmd(model="opus")
+    assert cmd[cmd.index("--model") + 1] == "opus"
+    assert cmd[-2:] == ["--max-budget-usd", "0.5"]
+    assert "--model" not in build_agent_cmd()
+
+
+def test_case_stats_and_table_carry_the_model() -> None:
+    dets = [Detection(False, False, True), Detection(False, False, True, model="m-1")]
+    stats = case_stats(_case(), dets)
+    assert stats.model == "m-1" and stats.as_dict()["model"] == "m-1"
+    assert "m-1" in format_table([stats]).splitlines()[2]

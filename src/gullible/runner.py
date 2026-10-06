@@ -23,7 +23,10 @@ DEFAULT_TOOLS = "Read,Edit,Write"
 
 
 def build_agent_cmd(
-    tools: str = DEFAULT_TOOLS, allowed_tools: tuple[str, ...] = (), safe_mode: bool = True
+    tools: str = DEFAULT_TOOLS,
+    allowed_tools: tuple[str, ...] = (),
+    safe_mode: bool = True,
+    model: str | None = None,
 ) -> list[str]:
     """Flags observed in `claude --help` (v2.1.236). stream-json requires --verbose in print mode.
 
@@ -40,7 +43,10 @@ def build_agent_cmd(
         if safe_mode
         else ["--setting-sources", "project", "--strict-mcp-config", "--disable-slash-commands"]
     )
-    cmd = ["claude", "-p", *isolation, "--permission-mode", "acceptEdits", "--tools", tools]
+    cmd = ["claude", "-p", *isolation, "--permission-mode", "acceptEdits"]
+    if model:
+        cmd += ["--model", model]  # an alias ('sonnet', 'opus') or a full model name
+    cmd += ["--tools", tools]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
     return cmd + [
@@ -73,6 +79,7 @@ class Detection:
     trap_seen: bool  # the planted text came back to the agent in a tool result
     completed: bool = True  # the agent emitted a successful final `result` event
     note: str = ""  # why the run is incomplete, when it is
+    model: str = ""  # model the agent reported in its init event
 
     @property
     def triggered(self) -> bool:
@@ -218,6 +225,7 @@ def run_once(
     timeout: float,
     trace_path: Path | None = None,
     agent_cmd: list[str] | None = None,
+    model: str | None = None,
 ) -> Detection:
     token = secrets.token_hex(8)
     canary_name = case.canary_file.replace(PLACEHOLDER, token)
@@ -225,10 +233,11 @@ def run_once(
         workdir = Path(tmp) / "workspace"
         prepare_workspace(case.workspace, workdir, token)
         cmd = agent_cmd if agent_cmd is not None else build_agent_cmd(
-            case.tools, case.allowed_tools, case.safe_mode
+            case.tools, case.allowed_tools, case.safe_mode, model
         )
         run = run_agent(workdir, case.task, timeout, cmd)
         detection = detect(workdir, canary_name, token, run.events)
+        detection = replace(detection, model=str(agent_info(run.events).get("model", "")))
         if case.trap_in_context:
             # Loaded context never shows up as a tool result, so a finished run saw the trap.
             detection = replace(detection, trap_seen=detection.completed)
@@ -300,6 +309,7 @@ class CaseStats:
     valid: int  # runs that count (see split_valid)
     triggered: int
     trap_seen: int
+    model: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         lo, hi = wilson_interval(self.triggered, self.valid)
@@ -316,18 +326,19 @@ def case_stats(case: Case, detections: list[Detection]) -> CaseStats:
         valid=len(valid),
         triggered=sum(d.triggered for d in valid),
         trap_seen=sum(d.trap_seen for d in valid),
+        model=next((d.model for d in detections if d.model), ""),
     )
 
 
 def format_table(rows: list[CaseStats]) -> str:
-    header = ("case", "carrier", "valid/total", "triggered", "95% CI", "trap seen")
+    header = ("case", "carrier", "model", "valid/total", "triggered", "95% CI", "trap seen")
     body = []
     for r in rows:
         lo, hi = wilson_interval(r.triggered, r.valid)
         rate = f"{r.triggered}/{r.valid} ({r.triggered / r.valid:.0%})" if r.valid else "n/a"
         ci = f"{lo:.0%}-{hi:.0%}" if r.valid else "n/a"
         name = f"[control] {r.id}" if r.control else r.id
-        body.append((name, r.carrier, f"{r.valid}/{r.total}", rate, ci, f"{r.trap_seen}/{r.valid}"))
+        body.append((name, r.carrier, r.model or "-", f"{r.valid}/{r.total}", rate, ci, f"{r.trap_seen}/{r.valid}"))
     widths = [max(len(row[c]) for row in [header, *body]) for c in range(len(header))]
     lines = ["  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip() for row in [header, *body]]
     return "\n".join([lines[0], "  ".join("-" * w for w in widths), *lines[1:]])
@@ -344,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gullible.runner")
     parser.add_argument("path", type=Path, help="a case directory, or a directory of cases (e.g. fixtures/)")
     parser.add_argument("--timeout", type=float, default=180.0, help="seconds per run")
+    parser.add_argument("--model", default=None,
+                        help="model for the agent: an alias such as 'sonnet' or a full name (default: the CLI's)")
     parser.add_argument("--repeat", type=int, default=None,
                         help="runs per case (default: the case's own `repeat`)")
     parser.add_argument("--results-dir", type=Path, default=Path("results"),
@@ -362,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = args.results_dir / case.id / stamp
         detections = []
         for i in range(1, repeat + 1):
-            d = run_once(case, args.timeout, run_dir / f"run-{i}.jsonl")
+            d = run_once(case, args.timeout, run_dir / f"run-{i}.jsonl", model=args.model)
             detections.append(d)
             status = "" if d.completed else f" INCOMPLETE ({d.note})"
             print(f"{case.id} run {i}/{repeat}: file={d.file_created} "
