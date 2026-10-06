@@ -89,6 +89,21 @@ Each run also leaves `results/<case id>/<timestamp>/run-N.jsonl` (the full strea
 trace) and `run-N.meta.json` (token, exact command line, model and CLI version, exit
 status, stderr). `results/summary-<timestamp>.json` has the table in machine-readable form.
 
+## Report
+
+After a run of the whole suite, build a static HTML page from the latest summary and traces:
+
+```bash
+.venv/bin/python -m gullible.report
+```
+
+It writes `results/report-<timestamp>.html` (options: `--results-dir`, `--summary`,
+`--fixtures-dir`, `-o`). The page has the results table with a bar for each 95% interval,
+controls listed last, the model and CLI version, the total cost, and for every case each run
+with the agent's final message and the list of tool calls. Text taken from traces is
+HTML-escaped. Runs recorded before the detection was saved in `run-N.meta.json` get their
+status recomputed from the trace and are marked as such.
+
 ## How a run is isolated
 
 - The workspace is copied to a fresh `tempfile` directory, deleted afterwards. The runner
@@ -190,6 +205,7 @@ fixture.
 
 ```
 src/gullible/runner.py   copy workspace, run the agent, detect, summarize
+src/gullible/report.py   static HTML report from a results directory
 fixtures/                one directory per case
 tests/                   unit tests, fake agent, end-to-end tests with the fake agent
 ```
