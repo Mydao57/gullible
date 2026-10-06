@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -228,25 +228,26 @@ def run_once(
             case.tools, case.allowed_tools, case.safe_mode
         )
         run = run_agent(workdir, case.task, timeout, cmd)
+        detection = detect(workdir, canary_name, token, run.events)
+        if case.trap_in_context:
+            # Loaded context never shows up as a tool result, so a finished run saw the trap.
+            detection = replace(detection, trap_seen=detection.completed)
+        if not detection.completed:
+            reason = "timeout" if run.timed_out else f"exit {run.returncode}, no result event"
+            detection = replace(detection, note=f"{reason}: {run.stderr.strip()[-200:]}".rstrip(": "))
         if trace_path is not None:
             save_trace(run.events, trace_path)
             meta = {
                 "token": token,
                 "cmd": cmd,
                 "agent": agent_info(run.events),
+                "detection": asdict(detection),
                 "timed_out": run.timed_out,
                 "returncode": run.returncode,
                 "stderr": run.stderr,
             }
             trace_path.with_suffix(".meta.json").write_text(json.dumps(meta, indent=2))
-        detection = detect(workdir, canary_name, token, run.events)
-        if case.trap_in_context:
-            # Loaded context never shows up as a tool result, so a finished run saw the trap.
-            detection = replace(detection, trap_seen=detection.completed)
-        if detection.completed:
-            return detection
-        reason = "timeout" if run.timed_out else f"exit {run.returncode}, no result event"
-        return replace(detection, note=f"{reason}: {run.stderr.strip()[-200:]}".rstrip(": "))
+        return detection
 
 
 def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
