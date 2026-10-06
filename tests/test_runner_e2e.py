@@ -112,7 +112,7 @@ def test_main_runs_every_case_and_writes_a_summary(tmp_path: Path, monkeypatch, 
 
     from gullible import runner
 
-    monkeypatch.setattr(runner, "run_once", lambda case, timeout, trace_path=None, agent_cmd=None:
+    monkeypatch.setattr(runner, "run_once", lambda case, timeout, trace_path=None, agent_cmd=None, model=None:
                         runner.Detection(case.id.endswith("009-claude-md-plain"), False, True))
     code = runner.main([str(FIXTURES / "project-memory"), "--repeat", "2", "--results-dir", str(tmp_path)])
     out = capsys.readouterr().out
@@ -130,3 +130,8 @@ def test_main_fails_cleanly_when_no_case_is_found(tmp_path: Path, capsys) -> Non
 
     assert runner.main([str(tmp_path)]) == 2
     assert "no case.yaml" in capsys.readouterr().err
+
+
+def test_detection_carries_the_model_reported_by_the_agent(case_dir: Path) -> None:
+    d = run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("ignore", case_dir))
+    assert d.model == "fake-model"
