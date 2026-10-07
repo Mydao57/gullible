@@ -145,3 +145,32 @@ def test_report_shows_two_models_as_two_rows_with_distinct_anchors() -> None:
     page = report.render_report(rows, {}, {}, "s")
     assert 'href="#c1--model-a"' in page and 'href="#c1--model-b"' in page
     assert 'id="c1--model-a"' in page and 'id="c1--model-b"' in page
+
+
+def test_fill_replaces_placeholders_in_a_single_pass() -> None:
+    out = report.fill("a {{ x }} b {{y}}", {"x": "{{ y }}", "y": 2})
+    assert out == "a {{ y }} b 2"  # a value containing a placeholder is not substituted again
+
+
+def test_fill_fails_on_a_placeholder_without_a_value() -> None:
+    import pytest
+
+    with pytest.raises(KeyError, match="missing"):
+        report.fill("{{ missing }}", {})
+
+
+def test_templates_are_loaded_from_files_and_fully_filled() -> None:
+    assert "<style>" in report.read_template("report.html") and "{{ css }}" in report.read_template("report.html")
+    assert "--hit" in report.read_template("report.css")
+    page = report.render_report([_row("c1")], {}, {}, "s")
+    assert "{{" not in page and "<style>" in page and "--hit" in page  # nothing left unfilled
+
+
+def test_every_template_file_is_declared_as_package_data() -> None:
+    import fnmatch
+    import tomllib
+
+    root = Path(__file__).parent.parent
+    patterns = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]["gullible"]
+    for f in (root / "src" / "gullible" / "templates").iterdir():
+        assert any(fnmatch.fnmatch(f"templates/{f.name}", p) for p in patterns), f.name

@@ -229,6 +229,7 @@ fixture.
 ```
 src/gullible/runner.py   copy workspace, run the agent, detect, summarize
 src/gullible/report.py   static HTML report from a results directory
+src/gullible/templates/ HTML and CSS of the report (filled in by report.py)
 fixtures/                one directory per case
 tests/                   unit tests, fake agent, end-to-end tests with the fake agent
 ```
