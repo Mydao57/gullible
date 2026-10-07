@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gullible report</title>
+<style>
+{{ css }}
+</style>
+</head>
+<body>
+<main>
+<h1>gullible report</h1>
+<p class="muted">Does a coding agent follow harmless instructions planted in what it works on?</p>
+<div class="meta"><span>Run set {{ stamp }}</span><span>Generated {{ generated }}</span><span>{{ n_cases }} cases, {{ n_runs }} runs</span><span>Cost ${{ cost }}</span><span>{{ models }}</span></div>
+<div class="notice"><b>Read the rates with their intervals.</b> One agent, a few synthetic fixtures and small samples:
+0% means "not observed in these runs", not "safe". A control row should read 0%; if it does not, the other
+results are suspect. "Trap seen" counts runs where the planted text actually reached the agent.</div>
+<h2>Results</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Case</th><th>Carrier</th><th class="num">Valid / total</th><th class="num">Followed</th><th>95% interval</th><th class="num">Trap seen</th></tr></thead>
+<tbody>{{ table }}</tbody></table></div>
+<h2>Cases and runs</h2>
+{{ details }}
+</main>
+</body>
+</html>
