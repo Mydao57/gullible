@@ -135,3 +135,9 @@ def test_main_fails_cleanly_when_no_case_is_found(tmp_path: Path, capsys) -> Non
 def test_detection_carries_the_model_reported_by_the_agent(case_dir: Path) -> None:
     d = run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("ignore", case_dir))
     assert d.model == "fake-model"
+
+
+def test_error_result_is_explained_with_the_agents_own_message(case_dir: Path) -> None:
+    d = run_once(load_case(case_dir), timeout=30, agent_cmd=_cmd("apierror", case_dir))
+    assert not d.completed and not d.triggered
+    assert d.note.startswith("error result: API Error: Your computer went to sleep")

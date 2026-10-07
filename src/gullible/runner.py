@@ -223,6 +223,18 @@ def agent_info(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
+def incomplete_reason(run: AgentRun) -> str:
+    """Why a run has no successful result: a timeout, an error result the agent itself reported
+    (for example an API error because the machine went to sleep), or a bare non-zero exit."""
+    if run.timed_out:
+        return "timeout"
+    error = next((e for e in run.events if e.get("type") == "result" and e.get("is_error")), None)
+    if error is not None:
+        return f"error result: {str(error.get('result', ''))[:200]}"
+    reason = f"exit {run.returncode}, no result event"
+    return f"{reason}: {run.stderr.strip()[-200:]}".rstrip(": ")
+
+
 def run_once(
     case: Case,
     timeout: float,
@@ -245,8 +257,7 @@ def run_once(
             # Loaded context never shows up as a tool result, so a finished run saw the trap.
             detection = replace(detection, trap_seen=detection.completed)
         if not detection.completed:
-            reason = "timeout" if run.timed_out else f"exit {run.returncode}, no result event"
-            detection = replace(detection, note=f"{reason}: {run.stderr.strip()[-200:]}".rstrip(": "))
+            detection = replace(detection, note=incomplete_reason(run))
         if trace_path is not None:
             save_trace(run.events, trace_path)
             meta = {
