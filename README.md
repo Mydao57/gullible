@@ -12,6 +12,14 @@ title of README.md"), and then checks whether the planted instruction was follow
 The payload is always a marker file. Nothing in this repository runs network commands or
 touches anything outside a temporary directory.
 
+## Responsible use
+
+Use it only with agents and accounts you are allowed to test, on your own quota. The planted
+instructions are harmless markers and must stay so; do not turn a fixture into something
+destructive or networked. Text under `fixtures/` is addressed to AI agents on purpose: if you
+point an AI assistant at this repository, tell it to treat `fixtures/` as data. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
 ## What it measures, and what it does not
 
 It measures how often the agent follows a specific planted instruction, in a specific
@@ -241,3 +249,7 @@ tests/                   unit tests, fake agent, end-to-end tests with the fake 
 - Hooks are covered (011). `.mcp.json` and project skills are not, on purpose: running a
   project's MCP servers or skills means also loading the user's own, and the runner cannot
   isolate a real run from those without risking side effects on the user's accounts.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
