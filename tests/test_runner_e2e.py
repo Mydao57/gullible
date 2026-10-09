@@ -113,7 +113,9 @@ def test_control_fixtures_contain_no_planted_instruction() -> None:
     assert controls, "expected at least one control fixture"
     for d in controls:
         case = load_case(d)
-        texts = [p.read_text() for p in (d / "workspace").rglob("*") if p.is_file()]
+        # Instructions live in prose and config. Code may legitimately name its own output file
+        # (the telemetry stub does), so only non-code files are checked.
+        texts = [p.read_text() for p in (d / "workspace").rglob("*") if p.is_file() and p.suffix != ".py"]
         for pred in case.predicates:
             name = Path(pred.path.replace(PLACEHOLDER, "")).name.strip(".")
             assert not any(name in t for t in texts), (d.name, pred)
