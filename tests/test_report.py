@@ -245,3 +245,33 @@ def test_build_gives_the_grid_to_summaries_that_predate_the_labels(tmp_path: Pat
     summary.write_text(json.dumps(rows))
     page = report.build(tmp_path, summary, FIXTURES)
     assert "Difficulty and impact" in page and "<th>hard</th>" in page
+
+
+def test_a_run_without_an_agent_block_in_its_meta_gets_the_model_from_its_init_event(tmp_path: Path) -> None:
+    summary = _make_results(tmp_path)
+    for meta in tmp_path.rglob("run-*.meta.json"):
+        data = json.loads(meta.read_text())
+        data.pop("agent", None)  # as written before meta.json recorded it
+        meta.write_text(json.dumps(data))
+    run_dir = next(tmp_path.glob("*/20260101-000000"))
+    assert {r.model for r in report.load_runs(run_dir, None)} == {"fake-model"}
+    assert summary.exists()
+
+
+def test_a_summary_without_a_model_takes_it_from_its_traces_and_merges_with_the_same_model(tmp_path: Path) -> None:
+    older = _make_results(tmp_path, "obey", "20260101-000000")
+    newer = _make_results(tmp_path, "ignore", "20260102-000000")
+    rows = json.loads(older.read_text())
+    for r in rows:
+        r.pop("model", None)  # a summary from before the model was recorded
+    older.write_text(json.dumps(rows))
+    page = report.build(tmp_path, [older, newer], FIXTURES)
+    assert "model not recorded" not in page
+    assert page.count('class="matrix"') == 1  # one grid: both summaries are the same model
+    assert "2/4 (50%)" in page  # pooled: 2 followed out of 4
+
+
+def test_cases_are_counted_once_even_when_run_with_two_models() -> None:
+    rows = [{**_row("c1"), "model": "model-a"}, {**_row("c1"), "model": "model-b"}, {**_row("c2"), "model": "model-a"}]
+    page = report.render_report(rows, {}, {}, "s")
+    assert "2 cases, 15 runs" in page

@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from gullible.runner import (
-    ACTION_FIELDS, DIFFICULTIES, IMPACTS, Case, discover_cases, load_case, parse_events, tool_calls,
-    wilson_interval,
+    ACTION_FIELDS, DIFFICULTIES, IMPACTS, Case, agent_info, discover_cases, load_case, parse_events,
+    tool_calls, wilson_interval,
 )
 
 # Temp workspace prefix in traces, e.g. /private/var/folders/.../gullible-ab12cd/workspace/
@@ -96,7 +96,8 @@ def load_runs(run_dir: Path, case: Case | None) -> list[RunRecord]:
         else:
             triggered = bool(det["file_created"] or det["token_in_tool_calls"])
             completed, trap_seen, note = bool(det["completed"]), bool(det["trap_seen"]), det.get("note", "")
-        agent = meta.get("agent", {})
+        # Runs recorded before meta.json had the agent block still carry it in their init event.
+        agent = meta.get("agent") or agent_info(events)
         records.append(RunRecord(
             index=int(re.search(r"\d+", trace.stem).group()),
             triggered=triggered,
@@ -292,7 +293,7 @@ def render_report(
             "stamp": esc(stamp),
             "generated": generated,
             "models": esc("; ".join(models) or "not recorded"),
-            "n_cases": len(rows),
+            "n_cases": len({r["id"] for r in rows}),  # one case run with two models is still one case
             "n_runs": sum(r["total"] for r in rows),
             "cost": f"{cost:.2f}",
             "matrix": render_matrix(rows),
@@ -328,11 +329,20 @@ def fill_labels(rows: list[dict[str, Any]], cases: dict[str, Case]) -> list[dict
 def build(results_dir: Path, summaries: Path | list[Path], fixtures_dir: Path) -> str:
     paths = [summaries] if isinstance(summaries, Path) else sorted(summaries)
     cases = {c.id: c for c in (load_case(d) for d in discover_cases(fixtures_dir))} if fixtures_dir.exists() else {}
-    rows = merge_rows([fill_labels(json.loads(p.read_text()), cases) for p in paths])
-    runs: dict[tuple[str, str], list[RunRecord]] = {row_key(r): [] for r in rows}
+    per_summary: list[list[tuple[dict[str, Any], list[RunRecord]]]] = []
     for path in paths:
-        for r in json.loads(path.read_text()):
+        loaded = []
+        for r in fill_labels(json.loads(path.read_text()), cases):
             records = load_runs(results_dir / r["id"] / stamp_of(path), cases.get(r["id"]))
+            if not r.get("model"):  # a summary from before --model: the traces know which model ran
+                model = next((x.model for x in records if x.model), "")
+                r = {**r, "model": model} if model else r
+            loaded.append((r, records))
+        per_summary.append(loaded)
+    rows = merge_rows([[r for r, _ in loaded] for loaded in per_summary])
+    runs: dict[tuple[str, str], list[RunRecord]] = {row_key(r): [] for r in rows}
+    for loaded in per_summary:
+        for r, records in loaded:
             runs[row_key(r)] += [x for x in records if not r.get("model") or x.model == r["model"]]
     label = stamp_of(paths[0]) if len(paths) == 1 else f"{len(paths)} run sets ({', '.join(stamp_of(p) for p in paths)})"
     return render_report(rows, runs, cases, label, show_stamp=len(paths) > 1)
