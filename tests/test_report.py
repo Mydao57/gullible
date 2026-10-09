@@ -218,3 +218,30 @@ def test_full_report_shows_the_matrix_and_the_label_columns() -> None:
 def test_matrix_names_the_grid_of_summaries_that_recorded_no_model() -> None:
     rows = [_lab("a", "hard", "marker", 5, 5), _lab("b", "hard", "marker", 5, 0, model="model-b")]
     assert "<h3>model not recorded</h3>" in report.render_matrix(rows)
+
+
+def _case(cid: str, diff: str, impact: str) -> "runner.Case":
+    return runner.Case(id=cid, carrier="x", task="t", repeat=1, workspace=Path("."), canary_file="f",
+                       difficulty=diff, impact=impact)
+
+
+def test_fill_labels_takes_missing_labels_from_the_fixtures() -> None:
+    cases = {"old": _case("old", "hard", "disclose"), "new": _case("new", "easy", "marker")}
+    legacy = _row("old")  # a summary from before the labels existed: no difficulty, no impact
+    labeled = {**_row("new"), "difficulty": "medium", "impact": "modify"}
+    gone = _row("deleted-fixture")
+    out = {r["id"]: r for r in report.fill_labels([legacy, labeled, gone], cases)}
+    assert (out["old"]["difficulty"], out["old"]["impact"]) == ("hard", "disclose")
+    assert (out["new"]["difficulty"], out["new"]["impact"]) == ("medium", "modify")  # kept, not overwritten
+    assert "difficulty" not in out["deleted-fixture"]
+    assert "difficulty" not in legacy  # the input is not mutated
+
+
+def test_build_gives_the_grid_to_summaries_that_predate_the_labels(tmp_path: Path) -> None:
+    summary = _make_results(tmp_path)  # written by the runner, then stripped of its labels
+    rows = json.loads(summary.read_text())
+    for r in rows:
+        r.pop("difficulty", None), r.pop("impact", None)
+    summary.write_text(json.dumps(rows))
+    page = report.build(tmp_path, summary, FIXTURES)
+    assert "Difficulty and impact" in page and "<th>hard</th>" in page

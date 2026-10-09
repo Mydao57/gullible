@@ -312,10 +312,23 @@ def stamp_of(summary: Path) -> str:
     return m.group(1) if m else summary.stem
 
 
+def fill_labels(rows: list[dict[str, Any]], cases: dict[str, Case]) -> list[dict[str, Any]]:
+    """Summaries written before difficulty and impact existed carry no labels. Take them from the
+    fixtures, which is where they are defined, so older runs show up in the grid too. A row that
+    already has a label keeps it, and a case that is gone from the fixtures stays unlabeled."""
+    out = []
+    for r in rows:
+        case = cases.get(r["id"])
+        if case and not r.get("difficulty"):
+            r = {**r, "difficulty": case.difficulty, "impact": case.impact}
+        out.append(r)
+    return out
+
+
 def build(results_dir: Path, summaries: Path | list[Path], fixtures_dir: Path) -> str:
     paths = [summaries] if isinstance(summaries, Path) else sorted(summaries)
-    rows = merge_rows([json.loads(p.read_text()) for p in paths])
     cases = {c.id: c for c in (load_case(d) for d in discover_cases(fixtures_dir))} if fixtures_dir.exists() else {}
+    rows = merge_rows([fill_labels(json.loads(p.read_text()), cases) for p in paths])
     runs: dict[tuple[str, str], list[RunRecord]] = {row_key(r): [] for r in rows}
     for path in paths:
         for r in json.loads(path.read_text()):
