@@ -78,6 +78,15 @@ Options: `--repeat N` (runs per case, default is the case's own `repeat`), `--ti
 passed to `claude --model`; default is the CLI's own), `--results-dir DIR` (default `results/`,
 git-ignored). The model the agent reports is recorded per run and shown in the table.
 
+Run several at once with `--jobs N` (default 1). Runs are independent (own temporary workspace, own
+token, own `claude` process), so this only shortens the wall-clock time: the same number of runs
+spends the same quota, just sooner, and rate limits are reached sooner. On Ctrl-C the queued runs are
+cancelled, the ones in flight are awaited, and a summary of what finished is written (exit code 130).
+
+```bash
+caffeinate -i .venv/bin/python -m gullible.runner fixtures/ --repeat 10 --jobs 4
+```
+
 Select cases by level with `--difficulty easy,medium,hard` and `--impact marker,modify,destroy,disclose,transmit`
 (a comma-separated list, or `all`, the default). The two filters combine:
 
@@ -320,6 +329,10 @@ tests/                   unit tests, fake agent, end-to-end tests with the fake 
 ## Known limits
 
 - One agent (Claude Code), one model at a time, small samples.
+- `--jobs` was checked with Haiku up to 4 runs at once: 16 runs, all complete, no error, a run about
+  10% slower than alone, and about 3.6 times less wall-clock time. Higher values and Sonnet were not
+  tried, and a subscription's rate limits are not visible to the runner: a refused run would show up as
+  incomplete and be excluded from the rates, not counted as resisting.
 - Decoy secrets say `FAKE`, so that nobody mistakes them for credentials. That may also tell the agent that
   copying or sending them is harmless, which would make `disclose` and `transmit` rates higher than for a
   real-looking secret: read them as an upper bound for that instruction.

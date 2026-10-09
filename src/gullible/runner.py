@@ -11,10 +11,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence, TypeVar
 
 import yaml
 
@@ -484,6 +485,45 @@ def discover_cases(path: Path) -> list[Path]:
     return sorted(p.parent for p in path.rglob("case.yaml"))
 
 
+T = TypeVar("T")
+R = TypeVar("R")
+
+
+def execute(
+    tasks: Sequence[T],
+    jobs: int,
+    work: Callable[[T], R],
+    on_done: Callable[[int, R], None],
+) -> tuple[dict[int, R], bool]:
+    """Run `work` on every task, `jobs` at a time, and call `on_done(index, result)` in the calling
+    thread as each one finishes. Returns the results by task index and whether it was interrupted.
+
+    Threads are enough: a run is a subprocess, not Python computation. On Ctrl-C the queued tasks
+    are cancelled (they would otherwise all run, and cost quota), the ones already running are
+    awaited, and what completed is returned. Any other exception cancels the queue and propagates.
+    """
+    results: dict[int, R] = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, jobs))
+    futures: dict[Future[R], int] = {pool.submit(work, t): i for i, t in enumerate(tasks)}
+    interrupted = False
+    try:
+        for future in as_completed(futures):
+            index = futures[future]
+            results[index] = future.result()
+            on_done(index, results[index])
+    except KeyboardInterrupt:
+        interrupted = True
+    except BaseException:
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True, cancel_futures=True)
+    for future, index in futures.items():  # runs that were in flight when the interrupt came
+        if index not in results and future.done() and not future.cancelled() and future.exception() is None:
+            results[index] = future.result()
+            on_done(index, results[index])
+    return results, interrupted
+
+
 def parse_levels(arg: str | None, allowed: tuple[str, ...], flag: str) -> set[str] | None:
     """`all` or nothing means no filter; otherwise a comma-separated subset of `allowed`."""
     if arg is None or arg.strip() == "all":
@@ -516,6 +556,9 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"{', '.join(IMPACTS)}, a comma-separated list, or all (default: all)")
     parser.add_argument("--model", default=None,
                         help="model for the agent: an alias such as 'sonnet' or a full name (default: the CLI's)")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="runs in parallel (default: 1). More is faster, not cheaper: the same quota "
+                             "is spent sooner, and rate limits are reached sooner")
     parser.add_argument("--repeat", type=int, default=None,
                         help="runs per case (default: the case's own `repeat`)")
     parser.add_argument("--results-dir", type=Path, default=Path("results"),
@@ -534,27 +577,43 @@ def main(argv: list[str] | None = None) -> int:
     if not cases:
         print("no case matches --difficulty / --impact", file=sys.stderr)
         return 2
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    if args.jobs > 8:
+        print(f"warning: --jobs {args.jobs} is a lot: rate limits and timeouts get likelier", file=sys.stderr)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    all_stats = []
-    for case in cases:
-        repeat = args.repeat if args.repeat is not None else case.repeat
-        run_dir = args.results_dir / case.id / stamp
-        detections = []
-        for i in range(1, repeat + 1):
-            d = run_once(case, args.timeout, run_dir / f"run-{i}.jsonl", model=args.model)
-            detections.append(d)
-            status = "" if d.completed else f" INCOMPLETE ({d.note})"
-            print(f"{case.id} run {i}/{repeat}: file={d.file_created} "
-                  f"token_in_calls={d.token_in_tool_calls} trap_seen={d.trap_seen}{status}", flush=True)
-        print(summarize(case.id, detections, case.control), flush=True)
-        all_stats.append(case_stats(case, detections))
+    repeats = [args.repeat if args.repeat is not None else c.repeat for c in cases]
+    tasks = [(ci, i) for ci, n in enumerate(repeats) for i in range(1, n + 1)]  # case by case
+    done: list[dict[int, Detection]] = [{} for _ in cases]
+
+    def work(task: tuple[int, int]) -> Detection:
+        ci, i = task
+        trace = args.results_dir / cases[ci].id / stamp / f"run-{i}.jsonl"
+        return run_once(cases[ci], args.timeout, trace, model=args.model)
+
+    def on_done(index: int, d: Detection) -> None:
+        ci, i = tasks[index]
+        done[ci][i] = d
+        status = "" if d.completed else f" INCOMPLETE ({d.note})"
+        print(f"{cases[ci].id} run {i}/{repeats[ci]}: file={d.file_created} "
+              f"token_in_calls={d.token_in_tool_calls} trap_seen={d.trap_seen}{status}", flush=True)
+        if len(done[ci]) == repeats[ci]:
+            print(summarize(cases[ci].id, [done[ci][k] for k in sorted(done[ci])], cases[ci].control), flush=True)
+
+    _, interrupted = execute(tasks, args.jobs, work, on_done)
+    all_stats = [
+        case_stats(c, [done[ci][k] for k in sorted(done[ci])])
+        for ci, c in enumerate(cases) if done[ci]  # a case with no finished run has nothing to report
+    ]
+    if interrupted:
+        print(f"\ninterrupted: {sum(len(d) for d in done)} of {len(tasks)} runs finished", file=sys.stderr)
 
     print("\n" + format_table(all_stats))
     summary_path = args.results_dir / f"summary-{stamp}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps([r.as_dict() for r in all_stats], indent=2))
     print(f"\nsummary: {summary_path}")
-    return 0
+    return 130 if interrupted else 0
 
 
 if __name__ == "__main__":
