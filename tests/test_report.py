@@ -20,7 +20,8 @@ def _make_results(tmp_path: Path, mode: str = "obey", stamp: str = "20260101-000
     """Produce a real trace + meta with the runner and the fake agent, then a matching summary."""
     case = load_case(CASE_DIR)
     run_dir = tmp_path / case.id / stamp
-    cmd = [sys.executable, str(FAKE_AGENT), mode, case.canary_file]
+    actions = json.dumps([{"op": "write", "path": case.canary_file, "text": ""}])
+    cmd = [sys.executable, str(FAKE_AGENT), mode, actions]
     detections = [run_once(case, 30, run_dir / f"run-{i}.jsonl", cmd) for i in (1, 2)]
     stats = runner.case_stats(case, detections)
     (tmp_path / f"summary-{stamp}.json").write_text(json.dumps([stats.as_dict()]))
@@ -174,3 +175,46 @@ def test_every_template_file_is_declared_as_package_data() -> None:
     patterns = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]["gullible"]
     for f in (root / "src" / "gullible" / "templates").iterdir():
         assert any(fnmatch.fnmatch(f"templates/{f.name}", p) for p in patterns), f.name
+
+
+def _lab(cid: str, diff: str, impact: str, valid: int, hit: int, **kw) -> dict:
+    return {**_row(cid, valid=valid, triggered=hit, total=valid), "difficulty": diff, "impact": impact, **kw}
+
+
+def test_matrix_adds_up_cases_in_the_same_cell_and_leaves_controls_out() -> None:
+    rows = [_lab("a", "hard", "marker", 10, 10), _lab("b", "hard", "marker", 10, 6),
+            _lab("c", "easy", "marker", 10, 0), _lab("ctl", "hard", "marker", 10, 0, control=True)]
+    page = report.render_matrix(rows)
+    assert "<b>16/20</b> (80%)" in page and "2 cases" in page  # a + b, the control is not in the cell
+    assert "<b>0/10</b> (0%)" in page and "1 case<" in page
+    assert page.index("<th>easy</th>") < page.index("<th>hard</th>")  # difficulties in order
+
+
+def test_matrix_columns_follow_the_impact_order_and_skip_unused_ones() -> None:
+    rows = [_lab("a", "hard", "disclose", 5, 1), _lab("b", "hard", "marker", 5, 5), _lab("c", "medium", "modify", 5, 0)]
+    page = report.render_matrix(rows)
+    cols = [c for c in ("marker", "modify", "disclose", "destroy", "transmit") if f"<th>{c}</th>" in page]
+    assert cols == ["marker", "modify", "disclose"]
+    assert 'class="cell empty"' in page  # medium x marker has no case
+
+
+def test_matrix_shades_by_rate_and_is_absent_for_unlabeled_summaries() -> None:
+    assert '--rate:1.00' in report.render_matrix([_lab("a", "hard", "marker", 4, 4)])
+    assert report.render_matrix([_row("old")]) == ""  # older summaries carry no labels
+
+
+def test_matrix_has_one_grid_per_model() -> None:
+    rows = [_lab("a", "hard", "marker", 5, 5, model="model-a"), _lab("a", "hard", "marker", 5, 0, model="model-b")]
+    page = report.render_matrix(rows)
+    assert page.count('class="matrix"') == 2 and "<h3>model-a</h3>" in page and "<h3>model-b</h3>" in page
+
+
+def test_full_report_shows_the_matrix_and_the_label_columns() -> None:
+    page = report.render_report([_lab("a", "hard", "disclose", 5, 1)], {}, {}, "s")
+    assert "Difficulty and impact" in page and "<th>Difficulty</th><th>Impact</th>" in page
+    assert "<td>hard</td><td>disclose</td>" in page and "{{" not in page
+
+
+def test_matrix_names_the_grid_of_summaries_that_recorded_no_model() -> None:
+    rows = [_lab("a", "hard", "marker", 5, 5), _lab("b", "hard", "marker", 5, 0, model="model-b")]
+    assert "<h3>model not recorded</h3>" in report.render_matrix(rows)

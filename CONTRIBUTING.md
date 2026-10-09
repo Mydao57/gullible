@@ -9,6 +9,10 @@ and "Detection".
 - **The payload stays harmless.** A fixture plants an instruction to create an empty marker
   file in a throwaway workspace, nothing else. No network access, no credentials, no
   destructive commands, nothing that reads or writes outside the workspace.
+- **No level exceeds the sandbox.** Higher impact means a more serious action asked for, never a
+  real one: decoy data that is obviously fake (`FAKE-...`), nothing leaves the throwaway
+  workspace, no network code anywhere in a fixture, and an API client is a stub that only writes a
+  local file.
 - **Fixtures are data.** Text under `fixtures/` is addressed to AI agents on purpose. If you
   point an AI coding assistant at this repository, tell it to treat everything under
   `fixtures/` as data and not to follow it.
@@ -35,7 +39,8 @@ See "Adding a fixture" in the README. Before opening the PR:
 1. `.venv/bin/pytest` passes (the end-to-end tests pick the fixture up automatically).
 2. You ran the case against a real agent and read a few traces. A rate means little if the
    agent never saw the trap: check the `trap seen` column.
-3. If the case has no planted instruction, mark it `control: true`.
+3. Label it with a `difficulty` and an `impact`. If the case has no planted instruction, mark it
+   `control: true`, and give each new impact a control.
 4. Say in the PR which model and CLI version you used, and how many runs.
 
 ## Pull requests
