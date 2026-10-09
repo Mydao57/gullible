@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from gullible.runner import (
-    ACTION_FIELDS, Case, discover_cases, load_case, parse_events, tool_calls, wilson_interval,
+    ACTION_FIELDS, DIFFICULTIES, IMPACTS, Case, discover_cases, load_case, parse_events, tool_calls,
+    wilson_interval,
 )
 
 # Temp workspace prefix in traces, e.g. /private/var/folders/.../gullible-ab12cd/workspace/
@@ -213,6 +214,46 @@ def merge_rows(row_sets: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     return list(merged.values())
 
 
+def render_matrix(rows: list[dict[str, Any]]) -> str:
+    """Difficulty (rows) by impact (columns), one grid per model. A cell adds up the runs of every
+    case with that pair of labels; controls are left out because they plant nothing. Cells are
+    shaded by rate. Empty when no case is labeled (older summaries)."""
+    labeled = [r for r in rows if not r.get("control") and r.get("difficulty")]
+    if not labeled:
+        return ""
+    out = []
+    models = sorted({r.get("model", "") for r in labeled})
+    for model in models:
+        mine = [r for r in labeled if r.get("model", "") == model]
+        impacts = [i for i in IMPACTS if any(r.get("impact", "marker") == i for r in mine)]
+        head = "".join(f"<th>{esc(i)}</th>" for i in impacts)
+        body = []
+        for diff in DIFFICULTIES:
+            cells = []
+            for imp in impacts:
+                group = [r for r in mine if r["difficulty"] == diff and r.get("impact", "marker") == imp]
+                valid = sum(r["valid"] for r in group)
+                if not valid:
+                    cells.append('<td class="cell empty">-</td>')
+                    continue
+                hit = sum(r["triggered"] for r in group)
+                lo, hi = wilson_interval(hit, valid)
+                cells.append(
+                    f'<td class="cell" style="--rate:{hit / valid:.2f}"><b>{hit}/{valid}</b> ({pct(hit / valid)})'
+                    f'<span class="muted">{pct(lo)} to {pct(hi)}, {len(group)} case{"s" if len(group) != 1 else ""}</span></td>'
+                )
+            if any("cell empty" not in c for c in cells):
+                body.append(f"<tr><th>{esc(diff)}</th>{''.join(cells)}</tr>")
+        title = f"<h3>{esc(model or 'model not recorded')}</h3>" if len(models) > 1 else ""
+        out.append(
+            f'{title}<div class="tablewrap"><table class="matrix"><thead><tr><th>Difficulty \\ impact</th>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>'
+        )
+    legend = ('<p class="muted">Followed / valid runs, with the 95% interval and the number of cases in the cell. '
+              "Controls are not counted.</p>")
+    return "<h2>Difficulty and impact</h2>" + "".join(out) + legend
+
+
 def render_report(
     rows: list[dict[str, Any]],
     runs_by_case: dict[tuple[str, str], list[RunRecord]],
@@ -236,7 +277,9 @@ def render_report(
         cls = " hot" if valid and rate >= 0.5 and not r.get("control") else ""
         bar = ci_bar(r["ci_low"], r["ci_high"], rate) if valid else ""
         table_rows.append(
-            f'<tr class="{cls.strip()}"><td>{name}</td><td>{esc(r["carrier"])}</td><td class="num">{valid}/{r["total"]}</td>'
+            f'<tr class="{cls.strip()}"><td>{name}</td><td>{esc(r["carrier"])}</td>'
+            f'<td>{esc(r.get("difficulty") or "-")}</td><td>{esc(r.get("impact", "marker"))}</td>'
+            f'<td class="num">{valid}/{r["total"]}</td>'
             f'<td class="num">{cell}</td><td class="cibox">{bar}<span class="muted">{pct(r["ci_low"])} to {pct(r["ci_high"])}</span></td>'
             f'<td class="num">{r["trap_seen"]}/{valid}</td></tr>'
         )
@@ -252,6 +295,7 @@ def render_report(
             "n_cases": len(rows),
             "n_runs": sum(r["total"] for r in rows),
             "cost": f"{cost:.2f}",
+            "matrix": render_matrix(rows),
             "table": "".join(table_rows),
             "details": details,
         },

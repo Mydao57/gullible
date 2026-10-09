@@ -49,3 +49,8 @@ details.run { border-top: 1px solid var(--line); padding: 8px 0; }
 details.run summary { cursor: pointer; }
 .final { white-space: pre-wrap; background: var(--bg); border-radius: 6px; padding: 10px 12px; margin: 8px 0; }
 .calls { margin: 6px 0 0; padding-left: 20px; }
+.matrix th, .matrix td { text-align: center; }
+.matrix tbody th { text-align: left; text-transform: none; letter-spacing: 0; font-size: 0.95rem; color: var(--text); }
+.matrix td.cell { background: color-mix(in srgb, var(--hit) calc(var(--rate, 0) * 55%), var(--surface)); }
+.matrix td.cell .muted { display: block; font-size: 0.78rem; }
+.matrix td.empty { color: var(--muted); }
